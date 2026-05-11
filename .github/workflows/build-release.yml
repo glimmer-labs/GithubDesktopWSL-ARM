@@ -22,7 +22,7 @@ env:
 
 jobs:
   build-daemon:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout github-desktop-wsl
         uses: actions/checkout@v6
@@ -40,7 +40,7 @@ jobs:
 
   build-windows:
     needs: build-daemon
-    runs-on: windows-2022
+    runs-on: windows-11-arm
     steps:
       - name: Checkout github-desktop-wsl (for patches + daemon source)
         uses: actions/checkout@v6
@@ -212,7 +212,7 @@ jobs:
             - Auto-updates from this repository
 
             ## Install
-            Download `GitHubDesktopWSLSetup-x64.exe` and run it. That's it — the daemon is bundled and starts automatically when you open a WSL repo.
+            Download `GitHubDesktopWSLSetup-arm64.exe` and run it. That's it — the daemon is bundled and starts automatically when you open a WSL repo.
 
             Windows SmartScreen may warn on first install — click "More info" → "Run anyway".
           files: |
