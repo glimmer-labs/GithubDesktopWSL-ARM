@@ -22,7 +22,7 @@ env:
 
 jobs:
   build-daemon:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout github-desktop-wsl
         uses: actions/checkout@v6
@@ -40,7 +40,7 @@ jobs:
 
   build-windows:
     needs: build-daemon
-    runs-on: windows-2022
+    runs-on: windows-11-arm
     steps:
       - name: Checkout github-desktop-wsl (for patches + daemon source)
         uses: actions/checkout@v6
@@ -212,7 +212,7 @@ jobs:
             - Auto-updates from this repository
 
             ## Install
-            Download `GitHubDesktopWSLSetup-x64.exe` and run it. That's it — the daemon is bundled and starts automatically when you open a WSL repo.
+            Download `GitHubDesktopWSLSetup-arm64.exe` and run it. That's it — the daemon is bundled and starts automatically when you open a WSL repo.
 
             Windows SmartScreen may warn on first install — click "More info" → "Run anyway".
           files: |
@@ -229,24 +229,10 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const title = `Patch failure on upstream ${{ inputs.upstream_tag }}`;
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const existing = await github.paginate(github.rest.issues.listForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'patch-conflict',
-              per_page: 100,
-            });
-            const dup = existing.find(i => i.title === title);
-            if (dup) {
-              console.log(`Open issue #${dup.number} already tracks this failure; skipping duplicate.`);
-              return;
-            }
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title,
-              body: `The build workflow failed while applying patches onto \`${{ inputs.upstream_tag }}\`.\n\nCheck the [workflow run](${runUrl}) for details.\n\nThis likely means upstream changed a file that one of our patches targets. The patch needs to be regenerated.`,
+              title: `Patch failure on upstream ${{ inputs.upstream_tag }}`,
+              body: `The build workflow failed while applying patches onto \`${{ inputs.upstream_tag }}\`.\n\nCheck the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.\n\nThis likely means upstream changed a file that one of our patches targets. The patch needs to be regenerated.`,
               labels: ['patch-conflict']
             });

@@ -2,7 +2,9 @@
 
 Think of it like the [VS Code Remote WSL extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl) but for GitHub Desktop. A fork of [GitHub Desktop](https://github.com/desktop/desktop) that makes WSL repositories work properly — **16-50x faster git operations**, working SSH keys, and no more CRLF issues.
 
-**[Download the latest release](https://github.com/aleixrodriala/GithubDesktopWSL/releases/latest)** — installs side-by-side with official GitHub Desktop
+**[Download the latest release](https://github.com/glimmer-labs/GithubDesktopWSL-ARM/releases/latest)** — installs side-by-side with official GitHub Desktop
+
+> This fork of [GithubDesktopWSL](https://github.com/aleixrodriala/GithubDesktopWSL) by [@aleixrodriala](https://github.com/aleixrodriala) adds ARM64 support. GitHub Desktop uses Squirrel.Windows, which does not support shipping multiple architectures in a single release, so the original repository only provides x64 builds. The upstream project remains maintained, and this fork will stay in sync with upstream changes. If you want to contribute or report an issue, please open it in the original repository unless it is ARM-specific.
 
 ## The problem
 
@@ -96,7 +98,7 @@ A typical Desktop refresh runs 10-20 commands. With git.exe that's 500-1000ms of
 
 ## Install
 
-1. Download **[GitHubDesktopWSLSetup-x64.exe](https://github.com/aleixrodriala/GithubDesktopWSL/releases/latest)**
+1. Download **[GitHubDesktopWSLSetup-arm64.exe](https://github.com/glimmer-labs/GithubDesktopWSL-ARM/releases/latest)**
 2. Run the installer
 3. Open any WSL repository
 
@@ -227,3 +229,4 @@ SKIP_CODE_SIGNING=1 yarn package
 Based on [GitHub Desktop](https://github.com/desktop/desktop) by GitHub, Inc.
 
 WSL support by [@aleixrodriala](https://github.com/aleixrodriala).
+ARM support by [@Haruki1707](https://github.com/Haruki1707).
