@@ -54,6 +54,7 @@
 
 static char g_token[TOKEN_LEN * 2 + 1];
 static volatile int g_running = 1;
+static int g_port = 0;
 
 /* --- Utility --- */
 
@@ -79,6 +80,20 @@ static void write_info_file(int port) {
 static void sighandler(int sig) {
     (void)sig;
     g_running = 0;
+}
+
+/* Remove the info file on exit only if it still points at us. The path is
+ * shared across daemons, so a daemon shutting down must not clobber a newer
+ * daemon's info file. */
+static void unlink_info_if_ours(void) {
+    FILE *f = fopen(INFO_PATH, "r");
+    if (!f) return;
+    char buf[256];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    const char *p = strstr(buf, "\"port\":");
+    if (p && atoi(p + 7) == g_port) unlink(INFO_PATH);
 }
 
 /* --- Frame I/O --- */
@@ -271,6 +286,101 @@ static int json_find_string_array(const char *json, const char *key, char ***out
     return 0;
 }
 
+/* Read a JSON string body starting just after the opening quote at *pp.
+ * Decodes common escapes (and \uXXXX as UTF-8) and advances *pp past the
+ * closing quote. Returns a malloc'd NUL-terminated string, or NULL if the
+ * string is unterminated. Env names/values are assumed free of embedded NULs. */
+static char *read_json_str(const char **pp) {
+    const char *p = *pp;
+    size_t cap = 32, i = 0;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    while (*p && *p != '"') {
+        if (i + 4 >= cap) {
+            cap *= 2;
+            char *tmp = realloc(out, cap);
+            if (!tmp) { free(out); return NULL; }
+            out = tmp;
+        }
+        if (*p == '\\' && *(p + 1)) {
+            p++;
+            switch (*p) {
+                case 'n': out[i++] = '\n'; p++; break;
+                case 'r': out[i++] = '\r'; p++; break;
+                case 't': out[i++] = '\t'; p++; break;
+                case 'b': out[i++] = '\b'; p++; break;
+                case 'f': out[i++] = '\f'; p++; break;
+                case '\\': out[i++] = '\\'; p++; break;
+                case '"': out[i++] = '"'; p++; break;
+                case '/': out[i++] = '/'; p++; break;
+                case 'u': {
+                    p++;
+                    int cp = hex4(p);
+                    if (cp < 0) { out[i++] = 'u'; break; }
+                    p += 4;
+                    i += utf8_encode(cp, out + i);
+                    break;
+                }
+                default: out[i++] = *p; p++; break;
+            }
+        } else {
+            out[i++] = *p++;
+        }
+    }
+    if (*p != '"') { free(out); return NULL; }
+    p++;
+    out[i] = '\0';
+    *pp = p;
+    return out;
+}
+
+/* Parse a JSON object  "env": { "K":"V", ... }  into parallel key/value arrays.
+ * Returns the number of pairs (0 if absent/empty/malformed). Caller frees each
+ * string and both arrays. */
+static int json_find_env(const char *json, char ***keys_out, char ***vals_out) {
+    *keys_out = NULL;
+    *vals_out = NULL;
+    const char *p = strstr(json, "\"env\"");
+    if (!p) return 0;
+    p += 5; /* past "env" */
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '{') return 0;
+    p++;
+
+    char **keys = NULL, **vals = NULL;
+    int count = 0, cap = 0;
+
+    while (*p) {
+        while (*p == ' ' || *p == ',' || *p == '\n' || *p == '\r' || *p == '\t') p++;
+        if (*p == '}' || *p == '\0') break;
+        if (*p != '"') break;            /* malformed */
+        p++;
+        char *key = read_json_str(&p);
+        if (!key) break;
+        while (*p == ' ') p++;
+        if (*p != ':') { free(key); break; }
+        p++;
+        while (*p == ' ') p++;
+        if (*p != '"') { free(key); break; }
+        p++;
+        char *val = read_json_str(&p);
+        if (!val) { free(key); break; }
+
+        if (count >= cap) {
+            cap = cap ? cap * 2 : 8;
+            keys = realloc(keys, cap * sizeof(char *));
+            vals = realloc(vals, cap * sizeof(char *));
+        }
+        keys[count] = key;
+        vals[count] = val;
+        count++;
+    }
+
+    *keys_out = keys;
+    *vals_out = vals;
+    return count;
+}
+
 /* --- Command handlers --- */
 
 static void handle_git(int cfd, const char *json) {
@@ -291,6 +401,10 @@ static void handle_git(int cfd, const char *json) {
 
     json_find_string(json, "cwd", cwd, sizeof(cwd));
     json_find_string_array(json, "args", &args, &argc);
+
+    /* Optional environment overrides (e.g. TERM, GIT_EDITOR) from the client. */
+    char **env_keys = NULL, **env_vals = NULL;
+    int env_count = json_find_env(json, &env_keys, &env_vals);
 
     /* Build argv: ["git", args...] */
     char **argv = calloc(argc + 2, sizeof(char *));
@@ -326,6 +440,10 @@ static void handle_git(int cfd, const char *json) {
         unsetenv("SSH_ASKPASS");
         unsetenv("DISPLAY");
         unsetenv("GIT_ASKPASS");
+
+        /* Apply caller-provided environment (overrides inherited values). */
+        for (int i = 0; i < env_count; i++)
+            setenv(env_keys[i], env_vals[i], 1);
 
         if (chdir(cwd) < 0) {
             fprintf(stderr, "chdir(%s): %s\n", cwd, strerror(errno));
@@ -388,6 +506,14 @@ cleanup:
     if (args) {
         for (int i = 0; i < argc; i++) free(args[i]);
         free(args);
+    }
+    if (env_keys) {
+        for (int i = 0; i < env_count; i++) {
+            free(env_keys[i]);
+            free(env_vals[i]);
+        }
+        free(env_keys);
+        free(env_vals);
     }
     free(argv);
     free(stdin_buf);
@@ -572,8 +698,16 @@ int main(int argc, char *argv[]) {
             daemonize = 1;
     }
 
-    signal(SIGINT, sighandler);
-    signal(SIGTERM, sighandler);
+    /* Install SIGINT/SIGTERM without SA_RESTART so a blocking accept() returns
+     * EINTR and the main loop can observe g_running == 0 and shut down promptly.
+     * (glibc's signal() uses SA_RESTART, which made the daemon ignore SIGTERM
+     * until the next connection woke accept().) */
+    struct sigaction sa;
+    sa.sa_handler = sighandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
     signal(SIGCHLD, SIG_DFL);
 
@@ -598,6 +732,7 @@ int main(int argc, char *argv[]) {
     socklen_t alen = sizeof(addr);
     getsockname(sfd, (struct sockaddr *)&addr, &alen);
     int port = ntohs(addr.sin_port);
+    g_port = port;
 
     if (listen(sfd, 16) < 0) { perror("listen"); return 1; }
 
@@ -647,7 +782,7 @@ int main(int argc, char *argv[]) {
         pthread_attr_destroy(&attr);
     }
 
-    unlink(INFO_PATH);
+    unlink_info_if_ours();
     close(sfd);
     printf("wsl-git-daemon stopped\n");
     return 0;
